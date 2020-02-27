@@ -1,0 +1,5 @@
+hikeeba-personafi
+work/*
+dev/*
+test/**.hsdb
+*.tmp
