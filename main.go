@@ -25,6 +25,9 @@ import (
 	"strconv"
 	"strings"
 
+	"crypto/md5"
+	"encoding/hex"
+
 	//hyperscan
 	"github.com/flier/gohs/hyperscan"
 
@@ -46,6 +49,7 @@ import (
 var (
 	// to be set during build
 	Binary    string
+	Cmd       string = "GoBCLy"
 	Version   string
 	BuildDate string
 	DebugFlag string
@@ -77,9 +81,10 @@ var (
 	flagByteOffset = flag.Bool("b", false, "Display offset in bytes of a matched pattern.")
 
 	// logging / debug options
-	flagNoColor = flag.Bool("C", false, "Disable colorized output.")
-	flagDebug   = flag.Bool("d", false, "Debug mode.")
-	flagSilent  = flag.Bool("s", false, "Silent mode.")
+	flagNoColor   = flag.Bool("C", false, "Disable colorized output.")
+	flagDebug     = flag.Bool("d", false, "Debug mode.")
+	flagSilent    = flag.Bool("s", false, "Silent mode.")
+	flagBenchmark = flag.Bool("B", false, "Benchmarking mode.")
 
 	// for storing pointers to io.Writers
 	fileWriter []io.Writer
@@ -97,12 +102,20 @@ type InputSet struct {
 var theme = func(s string) string { return s }
 
 func init() {
-
 	flag.Parse()
 
 	// setting DebugFlag = false will cause parameters
 	// with values that don't pass validation to be deleted
 	Debug, _ = strconv.ParseBool(DebugFlag)
+
+	// in case compile-time replacement doesn't happen
+	if Binary == "" {
+		Binary = os.Args[0]
+		Version = "dev"
+		BuildDate = "1976-10-19"
+		Debug = true
+		DebugFlag = "true"
+	}
 
 	if *flagDebug {
 		Debug = true
@@ -273,11 +286,12 @@ func main() {
 	//panic(fmt.Sprintf("PANIC!\n"))
 
 	if !*flagSilent {
-		fmt.Fprint(os.Stderr, "HIKEEBA! ["+fmt.Sprintf("%s %s(%s) DEBUG=%t", Binary, Version, BuildDate, Debug)+"] // Brett Whitty <bwhitty@pgdx.com>\n")
+		fmt.Fprint(os.Stderr, highlight("HIKEEBA!")+" "+cyan(Cmd)+" "+"["+fmt.Sprintf("%s %s(%s) DEBUG=%t", Binary, Version, BuildDate, Debug)+"] // Brett Whitty <bwhitty@pgdx.com>\n")
 	}
 
 	if *flagR1File == "" || *flagI1File == "" || *flagR2File == "" || *flagI2File == "" {
-		fmt.Fprintf(os.Stderr, "Usage: %s ["+green("flags")+"] <"+cyan("pattern file")+"> <"+cyan("input file")+">\n", highlight(os.Args[0]))
+		//fmt.Fprintf(os.Stderr, "Usage: %s ["+green("flags")+"] <"+cyan("pattern file")+"> <"+cyan("input file")+">\n", highlight(Binary))
+		fmt.Fprintf(os.Stderr, "Usage: %s ["+green("flags")+"]\n", highlight(Binary))
 		flag.PrintDefaults()
 		os.Exit(-1)
 	}
@@ -305,24 +319,24 @@ func main() {
 	// TODO: legacy
 	//inputFN := *flagR1File
 
-	// inputSet := InputSet{*flagR1File, *flagI1File, *flagR2File, *flagI2File, *flagPatternsFile, false}
+	inputSet := InputSet{*flagR1File, *flagI1File, *flagR2File, *flagI2File, *flagPatternsFile, false}
 
 	// TODO:	log.
 
 	// TODO: new
-	inputR1File := *flagR1File
-	inputI1File := *flagI1File
-	inputR2File := *flagR2File
-	inputI2File := *flagI2File
+	//	inputR1File := *flagR1File
+	//	inputI1File := *flagI1File
+	//	inputR2File := *flagR2File
+	//	inputI2File := *flagI2File
 
 	//	var barR1, barI1, barR2, barI2 int64
-	var bar *pb.ProgressBar
+	//	var bar *pb.ProgressBar
 
 	//	var dFQR DemuxReaders
-	readerR1, bar := getFQReader(inputR1File, true)
-	readerI1, _ := getFQReader(inputI1File, false)
-	readerR2, _ := getFQReader(inputR2File, false)
-	readerI2, _ := getFQReader(inputI2File, false)
+	readerR1, bar := getFQReader(inputSet.R1Filepath, true)
+	readerI1, _ := getFQReader(inputSet.I1Filepath, false)
+	readerR2, _ := getFQReader(inputSet.R2Filepath, false)
+	readerI2, _ := getFQReader(inputSet.I2Filepath, false)
 
 	//	totalBytes := bytesR1 + bytesI1 + bytesR2 + bytesI2
 	//	bar = pb.Full.Start64(totalBytes)
@@ -488,14 +502,18 @@ func main() {
 		scanFastqRecord(database, demuxScratch.I2, rI2)
 		seqCountI2++
 
-		if doneCount == 4 {
-			//			if !doneR1 || !doneI1 || !doneR2 || !doneI2 {
-			log.Warn(fmt.Sprintf("%d %d %d %d", seqCountR1, seqCountI1, seqCountR2, seqCountI2))
-			//				log.Fatal("Reached EOF in one or more files, but not all.")
-			//			}
-			bar.Finish()
+		if doneCount >= 1 {
+			if doneCount == 4 {
+				bar.Finish()
 
-			break
+				log.Debug(fmt.Sprintf("%d %d %d %d", seqCountR1, seqCountI1, seqCountR2, seqCountI2))
+
+				break
+			} else {
+				log.Error(fmt.Sprintf("%d %d %d %d", seqCountR1, seqCountI1, seqCountR2, seqCountI2))
+				log.Fatal("Encountered input file record mismatch!!!")
+				os.Exit(-1)
+			}
 		}
 
 		// will pass this into the eventHandler
@@ -713,7 +731,9 @@ func blockDatabaseFromFile(filename string) hyperscan.BlockDatabase {
 
 // returns string to use as serialized pattern database file name
 func getDbFilename(filename string) string {
-	return filename + ".hsdb"
+	fileMD5, err := getFileMD5(filename)
+	checkErr(err, fmt.Sprintf("Failed to generate MD5 digest of %s", filename))
+	return filename + "." + fileMD5 + ".hsdb"
 }
 
 // check if a file exists by name
@@ -753,21 +773,16 @@ func writeDbFile(dbFilename string, database hyperscan.BlockDatabase) {
 	dbData, err := database.Marshal()
 	checkErr(err, fmt.Sprintf("Could not serialize pattern DB, %s", err))
 
-	// open a filehandle for writing the DB file
-	outFile, err := os.Create(dbFilename)
-	checkErr(err, fmt.Sprintf("Couldn't open DB file '%s' for writing! %s", dbFilename, err))
-	defer outFile.Close()
-
-	// create gzip stream writer
-	gzWriter, err := gzip.NewWriterLevel(outFile, gzip.BestCompression)
-	checkErr(err, fmt.Sprintf("Couldn't create gzip writer! %s", err))
+	// get a gzip stream writer
+	gzWriter := getGzWriter(dbFilename)
 	defer gzWriter.Close()
 
 	// write gzip compressed DB bytes to file
 	gzWriter.Write(dbData)
 }
 
-func getGzWriter(filename string) io.Writer {
+// returns a pointer to a gzip.Writer
+func getGzWriter(filename string) *gzip.Writer {
 	// open a filehandle for writing the file
 	outFile, err := os.Create(filename)
 	checkErr(err, fmt.Sprintf("Couldn't open file '%s' for writing! %s", outFile, err))
@@ -800,7 +815,11 @@ func getFileSizeInBytes(filename string) int64 {
 	return fileSizeInBytes
 }
 
+// returns pointer to a FASTQ reader;
+// if wantBar = true returns pointer to a pb.ProgressBar for read IO, otherwise nil
 func getFQReader(filename string, wantBar bool) (*fasta.FqReader, *pb.ProgressBar) {
+	// if wantBar = true, this will be progress bar for read IO
+	// ... otherwise = nil
 	var bar *pb.ProgressBar
 
 	// input is STDIN?
@@ -826,7 +845,6 @@ func getFQReader(filename string, wantBar bool) (*fasta.FqReader, *pb.ProgressBa
 		inFile, err = os.Open(filename)
 		checkErr(err)
 	}
-	//	defer inFile.Close()
 
 	var fileReader io.Reader
 
@@ -839,14 +857,11 @@ func getFQReader(filename string, wantBar bool) (*fasta.FqReader, *pb.ProgressBa
 		} else {
 			fileReader = inFile
 		}
-		//inFile = bar.NewProxyReader(inFile).(io.Reader)
-		//defer bar.Finish()
 	}
 
 	// set up a FASTQ reader, supporting gz'd stream
 	var fqr fasta.FqReader
 	if isGzip {
-		//		barReader := bar.NewProxyReader(inFile)
 		gzipReader, err := gzip.NewReader(fileReader)
 		checkErr(err)
 		fqr.Reader = bufio.NewReader(gzipReader)
@@ -857,4 +872,21 @@ func getFQReader(filename string, wantBar bool) (*fasta.FqReader, *pb.ProgressBa
 	}
 
 	return &fqr, bar
+}
+
+// cut and paste md5 checksum code
+func getFileMD5(filePath string) (string, error) {
+	var fileMd5Sum string
+	file, err := os.Open(filePath)
+	if err != nil {
+		return fileMd5Sum, err
+	}
+	defer file.Close()
+	hash := md5.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return fileMd5Sum, err
+	}
+	hashInBytes := hash.Sum(nil)[:16]
+	fileMd5Sum = hex.EncodeToString(hashInBytes)
+	return fileMd5Sum, nil
 }
