@@ -1,4 +1,6 @@
+*.fastq.gz
 hikeeba-personafi
+hikeeba
 work/*
 dev/*
 test/**.hsdb

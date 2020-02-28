@@ -1,4 +1,4 @@
-module bwhitty/hikeeba-personafi
+module bwhitty/hikeeba
 
 go 1.14
 

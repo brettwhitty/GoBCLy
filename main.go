@@ -52,37 +52,80 @@ var (
 	Debug     bool
 
 	// flags
-	flagNoColor    = flag.Bool("C", false, "Disable colorized output.")
-	flagRecompile  = flag.Bool("c", false, "Force pattern database recompile.")
-	flagPrintId    = flag.Bool("i", false, "Print ID of sequence record.")
-	flagFASTQOut   = flag.Bool("q", false, "Print FASTQ output.")
-	flagFASTQMSeq  = flag.Bool("m", false, "Include matched sequence in FASTQ / ID output formats.")
-	flagLTrim      = flag.Bool("L", false, "Trim sequence left/upstream of match.")
-	flagRTrim      = flag.Bool("R", false, "Trim sequence right/downstream of match.")
-	flagMTrim      = flag.Bool("M", false, "Trim matched sequence.")
-	flagRevComp    = flag.Bool("r", false, "Reverse-complement output.")
-	flagByteOffset = flag.Bool("b", false, "Display offset in bytes of a matched pattern.")
-	flagProgress   = flag.Bool("progress", true, "Show progress bar.")
-	flagSilent     = flag.Bool("s", false, "Silent mode.")
 
+	// input flags
+	flagR1File       = flag.String("r1", "", "Path to R1 file.")
+	flagR2File       = flag.String("r2", "", "Path to R2 file.")
+	flagI1File       = flag.String("i1", "", "Path to I1 file.")
+	flagI2File       = flag.String("i2", "", "Path to I2 file.")
+	flagPatternsFile = flag.String("p", "", "Path to Hyperscan-complatible PCRE patterns table file.")
+
+	// database flags
+	flagRecompile = flag.Bool("c", false, "Force pattern database recompile.")
+
+	// global output options
+	// => match / non-match output options
+	flagLTrim   = flag.Bool("L", false, "Trim sequence left/upstream of match.")
+	flagRTrim   = flag.Bool("R", false, "Trim sequence right/downstream of match.")
+	flagMTrim   = flag.Bool("M", false, "Trim matched sequence.")
+	flagRevComp = flag.Bool("r", false, "Reverse-complement output.")
+	// => FASTQ output options
+	flagFASTQOut  = flag.Bool("q", false, "Print FASTQ output.")
+	flagFASTQMSeq = flag.Bool("m", false, "Include matched sequence in FASTQ / ID output formats.")
+	// generic match output
+	flagPrintId    = flag.Bool("i", false, "Print ID of sequence record.")
+	flagByteOffset = flag.Bool("b", false, "Display offset in bytes of a matched pattern.")
+
+	// logging / debug options
+	flagNoColor = flag.Bool("C", false, "Disable colorized output.")
+	flagDebug   = flag.Bool("d", false, "Debug mode.")
+	flagSilent  = flag.Bool("s", false, "Silent mode.")
+
+	// for storing pointers to io.Writers
 	fileWriter []io.Writer
 )
+
+type InputSet struct {
+	R1Filepath   string
+	I1Filepath   string
+	R2Filepath   string
+	I2Filepath   string
+	PatternsFile string
+	OK           bool
+}
 
 var theme = func(s string) string { return s }
 
 func init() {
+
+	flag.Parse()
+
 	// setting DebugFlag = false will cause parameters
 	// with values that don't pass validation to be deleted
 	Debug, _ = strconv.ParseBool(DebugFlag)
 
+	if *flagDebug {
+		Debug = true
+	}
+	if !*flagSilent {
+		Debug = false
+	}
+
 	// init logger
+	log.SetFormatter(&log.TextFormatter{
+		DisableColors: false,
+		FullTimestamp: true,
+	})
+	log.SetLevel(log.InfoLevel)
 	log.SetOutput(os.Stderr)
+
+	// TODO: flag for log redirect to file
 
 	if Debug {
 		log.SetLevel(log.DebugLevel)
+	} else if *flagSilent {
+		log.SetLevel(log.ErrorLevel)
 	}
-
-	flag.Parse()
 }
 
 func cyan(s string) string {
@@ -101,8 +144,31 @@ func highlight(s string) string {
 
 // Record contains the data from a fasta fastq record
 type FASTQRecord struct {
-	Name, Seq, Qual string
+	Name, Seq, Qual, Type string
 }
+
+type DemuxRecord struct {
+	R1 FASTQRecord
+	I1 FASTQRecord
+	R2 FASTQRecord
+	I2 FASTQRecord
+}
+
+type DemuxReaders struct {
+	R1 *fasta.FqReader
+	I1 *fasta.FqReader
+	R2 *fasta.FqReader
+	I2 *fasta.FqReader
+}
+
+type DemuxScratch struct {
+	R1 *hyperscan.Scratch
+	I1 *hyperscan.Scratch
+	R2 *hyperscan.Scratch
+	I2 *hyperscan.Scratch
+}
+
+var demuxSet [4]FASTQRecord
 
 //type FASTQRecord interface {
 //}
@@ -210,38 +276,69 @@ func main() {
 		fmt.Fprint(os.Stderr, "HIKEEBA! ["+fmt.Sprintf("%s %s(%s) DEBUG=%t", Binary, Version, BuildDate, Debug)+"] // Brett Whitty <bwhitty@pgdx.com>\n")
 	}
 
-	if flag.NArg() != 2 {
+	if *flagR1File == "" || *flagI1File == "" || *flagR2File == "" || *flagI2File == "" {
 		fmt.Fprintf(os.Stderr, "Usage: %s ["+green("flags")+"] <"+cyan("pattern file")+"> <"+cyan("input file")+">\n", highlight(os.Args[0]))
+		flag.PrintDefaults()
 		os.Exit(-1)
 	}
 
 	if !*flagNoColor {
+		// enable color if supported, unless disabled by flag
 		stat, _ := os.Stdout.Stat()
-
 		if stat != nil && stat.Mode()&os.ModeType != 0 {
 			theme = highlight
 		}
+	} else {
+		log.SetFormatter(&log.TextFormatter{
+			DisableColors: true,
+		})
 	}
 
 	//pattern := hyperscan.NewPattern(flag.Arg(0), hyperscan.DotAll|hyperscan.SomLeftMost)
 	//pattern := hyperscan.NewPattern(flag.Arg(0), hyperscan.SomLeftMost|hyperscan.Caseless)
-	patternFile := flag.Arg(0)
+	patternFile := *flagPatternsFile
 
 	//    spew.Dump(hyperscan.ExpressionInfo(pattern.Expression))
 	//   return
 
 	// input file
-	inputFN := flag.Arg(1)
+	// TODO: legacy
+	//inputFN := *flagR1File
+
+	// inputSet := InputSet{*flagR1File, *flagI1File, *flagR2File, *flagI2File, *flagPatternsFile, false}
+
+	// TODO:	log.
+
+	// TODO: new
+	inputR1File := *flagR1File
+	inputI1File := *flagI1File
+	inputR2File := *flagR2File
+	inputI2File := *flagI2File
+
+	//	var barR1, barI1, barR2, barI2 int64
+	var bar *pb.ProgressBar
+
+	//	var dFQR DemuxReaders
+	readerR1, bar := getFQReader(inputR1File, true)
+	readerI1, _ := getFQReader(inputI1File, false)
+	readerR2, _ := getFQReader(inputR2File, false)
+	readerI2, _ := getFQReader(inputI2File, false)
+
+	//	totalBytes := bytesR1 + bytesI1 + bytesR2 + bytesI2
+	//	bar = pb.Full.Start64(totalBytes)
+
+	// TODO: factor this out into 'getFileType'
 
 	// input is STDIN?
-	isSTDIN := strings.EqualFold("/dev/stdin", inputFN) || strings.EqualFold("stdin", inputFN) || strings.EqualFold("-", inputFN)
+	//	isSTDIN := strings.EqualFold("/dev/stdin", inputFN) || strings.EqualFold("stdin", inputFN) || strings.EqualFold("-", inputFN)
 
 	// check if input is gzipped
-	isGzip, err := regexp.MatchString(`\.gz$`, inputFN)
-	checkErr(err)
+	//	isGzip, err := regexp.MatchString(`\.gz$`, inputFN)
+	//	checkErr(err)
 
+	// TODO: move this into some sort of file integrity check?
 	// file size in bytes
-	var fileSizeB int64 = 0
+	//	var inputFileSizeBytes int64 = 0
 
 	// TODO: ADD EDIT / HAMMING DISTANCE SUPPORT!!!
 
@@ -260,47 +357,51 @@ func main() {
 	//}
 
 	// Read our pattern set in and build Hyperscan databases from it.
-	fmt.Fprintf(os.Stderr, highlight("INFO: ")+"Pattern file: %s\n", patternFile)
+	log.Info(fmt.Sprintf("Pattern file: %s\n", patternFile))
 	//dbStreaming, dbBlock := databasesFromFile(patternFile)
 	database := blockDatabaseFromFile(patternFile)
-
 	defer database.Close()
 
-	var inFile *os.File
-	// open file for reading
-	if isSTDIN {
-		// input is STDIN
-		inFile = os.Stdin
-	} else {
-		fileInfo, err := os.Stat(inputFN)
-		checkErr(err)
-		fileSizeB = fileInfo.Size()
+	/* if false {
+		var inFile *os.File
+		// open file for reading
+		if isSTDIN {
+			// input is STDIN
+			inFile = os.Stdin
+		} else {
+			inputFileSizeBytes = getFileSizeInBytes(inputFN)
 
-		// input is normal file
-		inFile, err = os.Open(inputFN)
-		checkErr(err)
+			// input is normal file
+			inFile, err = os.Open(inputFN)
+			checkErr(err)
+		}
+		defer inFile.Close()
+
+		var fileReader io.Reader
+
+		if *flagSilent {
+			fileReader = inFile
+		} else {
+			bar = pb.Full.Start64(inputFileSizeBytes)
+			//inFile = bar.NewProxyReader(inFile).(io.Reader)
+			fileReader = bar.NewProxyReader(inFile)
+			defer bar.Finish()
+		}
+
+		// set up a FASTQ reader, supporting gz'd stream
+		var fqr fasta.FqReader
+		if isGzip {
+			//		barReader := bar.NewProxyReader(inFile)
+			gzipReader, err := gzip.NewReader(fileReader)
+			checkErr(err)
+			fqr.Reader = bufio.NewReader(gzipReader)
+		} else {
+			// get buffered reader
+			barReader := bar.NewProxyReader(fileReader)
+			fqr.Reader = bufio.NewReader(barReader)
+		}
+
 	}
-	defer inFile.Close()
-
-	var bar *pb.ProgressBar
-	if fileSizeB != 0 {
-		bar = pb.Full.Start64(fileSizeB)
-	}
-
-	// set up a FASTQ reader, supporting gz'd stream
-	var fqr fasta.FqReader
-	if isGzip {
-		barReader := bar.NewProxyReader(inFile)
-		gzipReader, err := gzip.NewReader(barReader)
-		checkErr(err)
-		fqr.Reader = bufio.NewReader(gzipReader)
-	} else {
-		// get buffered reader
-		barReader := bar.NewProxyReader(inFile)
-		fqr.Reader = bufio.NewReader(barReader)
-	}
-	defer bar.Finish()
-
 	// buffer to store the sequence data for scanning
 	//var inputData []byte
 
@@ -319,32 +420,110 @@ func main() {
 	 * In this example, we provide the input pattern as the context pointer so
 	 * that the callback is able to print out the pattern that matched on each
 	 * match event.
-	 */
+	*/
 	scratch, err := hyperscan.NewScratch(database)
 	checkErr(err, fmt.Sprintf("Unable to allocate scratch space. Exiting."))
 	defer scratch.Free()
 
-	seqCount := 0
-	for r, done := fqr.Iter(); !done; r, done = fqr.Iter() {
-		seqCount++
+	var demuxScratch DemuxScratch
+
+	// scratch clones for demux threads
+	demuxScratch.R1, err = scratch.Clone()
+	checkErr(err)
+	demuxScratch.I1, err = scratch.Clone()
+	checkErr(err)
+	demuxScratch.R2, err = scratch.Clone()
+	checkErr(err)
+	demuxScratch.I2, err = scratch.Clone()
+	checkErr(err)
+
+	doneCount := 0
+	seqCountR1 := 0
+	seqCountI1 := 0
+	seqCountR2 := 0
+	seqCountI2 := 0
+	for {
+		/*
+			R1
+		*/
+		fqR1, doneR1 := readerR1.Iter()
+		if doneR1 {
+			doneCount++
+		}
+		rR1 := FASTQRecord{Name: fqR1.Name, Seq: fqR1.Seq, Qual: fqR1.Qual}
+		log.Debug(rR1.Name)
+		scanFastqRecord(database, demuxScratch.R1, rR1)
+		seqCountR1++
+		/*
+			I1
+		*/
+		fqI1, doneI1 := readerI1.Iter()
+		if doneI1 {
+			doneCount++
+		}
+		rI1 := FASTQRecord{Name: fqI1.Name, Seq: fqI1.Seq, Qual: fqI1.Qual}
+		log.Debug(rI1.Name)
+		scanFastqRecord(database, demuxScratch.I1, rI1)
+		seqCountI1++
+		/*
+			R2
+		*/
+		fqR2, doneR2 := readerR2.Iter()
+		if doneR2 {
+			doneCount++
+		}
+		rR2 := FASTQRecord{Name: fqR2.Name, Seq: fqR2.Seq, Qual: fqR2.Qual}
+		log.Debug(rR2.Name)
+		scanFastqRecord(database, demuxScratch.R2, rR2)
+		seqCountR2++
+		/*
+			I2
+		*/
+		fqI2, doneI2 := readerI2.Iter()
+		if doneI2 {
+			doneCount++
+		}
+		rI2 := FASTQRecord{Name: fqI2.Name, Seq: fqI2.Seq, Qual: fqI2.Qual}
+		log.Debug(rI2.Name)
+		scanFastqRecord(database, demuxScratch.I2, rI2)
+		seqCountI2++
+
+		if doneCount == 4 {
+			//			if !doneR1 || !doneI1 || !doneR2 || !doneI2 {
+			log.Warn(fmt.Sprintf("%d %d %d %d", seqCountR1, seqCountI1, seqCountR2, seqCountI2))
+			//				log.Fatal("Reached EOF in one or more files, but not all.")
+			//			}
+			bar.Finish()
+
+			break
+		}
 
 		// will pass this into the eventHandler
-		record := FASTQRecord{Name: r.Name, Seq: r.Seq, Qual: r.Qual}
+		//		recordR1 := FASTQRecord{Name: rI1.Name, Seq: r.Seq, Qual: r.Qual}
 
 		//go func() {
 
 		// create byte buffer from FASTQ record sequence string
 		// => strings.TrimSpace() may be overkill here
 		// eventHandler is expecting input is a line terminated with "\n"
-		inputData := []byte(strings.TrimSpace(record.Seq) + "\n")
+		//inputData := []byte(strings.TrimSpace(record.Seq) + "\n")
 
+		// prepare demux recordset for output
+		//recordSet := DemuxRecord{record, record, record, record}
+		//		recordSet := DemuxRecord{rR1, rI1, rR2, rI2}
+
+		//		for _, record := range []FASTQRecord{recordSet.R1, recordSet.I1, recordSet.R2, recordSet.I2} {
+
+		//			scanFastqRecord(database, scratch, record)
 		//		fmt.Fprintf(os.Stderr, "%d: %s\n", lineCount, inputData)
 		//fmt.Fprintf(os.Stderr, "Scanning %d bytes with Hyperscan\n", len(inputData))
 
-		if err := database.Scan(inputData, scratch, eventHandler, record); err != nil {
-			fmt.Fprint(os.Stderr, "ERROR: Unable to scan input buffer. Exiting.\n")
-			os.Exit(-1)
-		}
+		///		if err := database.Scan(inputData, scratch, eventHandler, record); err != nil {
+		//			fmt.Fprint(os.Stderr, "ERROR: Unable to scan input buffer. Exiting.\n")
+		//			os.Exit(-1)
+		//		}
+
+		//		}
 
 		//}()
 	}
@@ -357,6 +536,11 @@ func main() {
 }
 
 func scanFastqRecord(database hyperscan.BlockDatabase, scratch *hyperscan.Scratch, record FASTQRecord) {
+
+	//var demuxRecordKeys = []string("R1","I1","R2","I2")
+
+	//	for i, k := range demuxRecordKeys {
+	//		record := demuxRecord[i]
 
 	// => strings.TrimSpace() may be overkill here
 	// eventHandler is expecting input is a line terminated with "\n"
@@ -371,6 +555,8 @@ func scanFastqRecord(database hyperscan.BlockDatabase, scratch *hyperscan.Scratc
 	}
 
 }
+
+//}
 
 func checkErr(err error, optMsg ...string) {
 	msg := ""
@@ -501,12 +687,12 @@ func blockDatabaseFromFile(filename string) hyperscan.BlockDatabase {
 
 	// short circuit compiling if we already have a serialized db
 	if fileExists(dbFilename) {
-		fmt.Fprintf(os.Stderr, highlight("INFO: ")+"Serialized pattern DB exists, use '-c' flag to recompile from text.\n")
-		fmt.Fprintf(os.Stderr, highlight("INFO: ")+"Reading from pattern DB file: %s\n", dbFilename)
+		log.Info("Serialized pattern DB exists, use '-c' flag to recompile from text.")
+		log.Info(fmt.Sprintf("Reading from pattern DB file: %s", dbFilename))
 		return readDbFile(dbFilename)
 	}
 
-	fmt.Fprintf(os.Stderr, highlight("INFO: ")+"Compiling patterns ... ")
+	log.Info("Compiling patterns ... ")
 
 	// do the actual file reading and pattern parsing
 	patterns := parseFile(filename)
@@ -515,12 +701,12 @@ func blockDatabaseFromFile(filename string) hyperscan.BlockDatabase {
 	bdb, err := hyperscan.NewBlockDatabase(patterns...)
 	checkErr(err, fmt.Sprintf("Could not compile patterns, %s", err))
 
-	fmt.Fprintf(os.Stderr, "DONE!\n")
+	log.Info(" ... DONE!")
 
 	// serialize the compiled database to save time on next run
-	fmt.Fprintf(os.Stderr, highlight("INFO: ")+"Serializing pattern DB ... ")
+	log.Info("Serializing pattern DB ... ")
 	writeDbFile(dbFilename, bdb)
-	fmt.Fprintf(os.Stderr, "DONE!\n")
+	log.Info(" ... DONE!")
 
 	return bdb
 }
@@ -530,6 +716,7 @@ func getDbFilename(filename string) string {
 	return filename + ".hsdb"
 }
 
+// check if a file exists by name
 func fileExists(filename string) bool {
 	info, err := os.Stat(filename)
 
@@ -590,4 +777,84 @@ func getGzWriter(filename string) io.Writer {
 	checkErr(err, fmt.Sprintf("Couldn't create gzip writer! %s", err))
 
 	return gzWriter
+}
+
+// returns an IO.Reader for a file
+func getFileReader(filename string) io.Reader {
+	var fileReader io.Reader
+
+	// input is normal file
+	fileReader, err := os.Open(filename)
+	checkErr(err)
+
+	return fileReader
+}
+
+// returns a gzip IO.Reader
+
+// returns the size of a file in bytes
+func getFileSizeInBytes(filename string) int64 {
+	fileInfo, err := os.Stat(filename)
+	checkErr(err)
+	fileSizeInBytes := fileInfo.Size()
+	return fileSizeInBytes
+}
+
+func getFQReader(filename string, wantBar bool) (*fasta.FqReader, *pb.ProgressBar) {
+	var bar *pb.ProgressBar
+
+	// input is STDIN?
+	isSTDIN := strings.EqualFold("/dev/stdin", filename) || strings.EqualFold("stdin", filename) || strings.EqualFold("-", filename)
+
+	// check if input is gzipped
+	isGzip, err := regexp.MatchString(`\.gz$`, filename)
+	checkErr(err)
+
+	// TODO: move this into some sort of file integrity check?
+	// file size in bytes
+	var inputFileSizeBytes int64 = 0
+
+	var inFile *os.File
+	// open file for reading
+	if isSTDIN {
+		// input is STDIN
+		inFile = os.Stdin
+	} else {
+		inputFileSizeBytes = getFileSizeInBytes(filename)
+
+		// input is normal file
+		inFile, err = os.Open(filename)
+		checkErr(err)
+	}
+	//	defer inFile.Close()
+
+	var fileReader io.Reader
+
+	if *flagSilent {
+		fileReader = inFile
+	} else {
+		if wantBar {
+			bar = pb.Full.Start64(inputFileSizeBytes)
+			fileReader = bar.NewProxyReader(inFile)
+		} else {
+			fileReader = inFile
+		}
+		//inFile = bar.NewProxyReader(inFile).(io.Reader)
+		//defer bar.Finish()
+	}
+
+	// set up a FASTQ reader, supporting gz'd stream
+	var fqr fasta.FqReader
+	if isGzip {
+		//		barReader := bar.NewProxyReader(inFile)
+		gzipReader, err := gzip.NewReader(fileReader)
+		checkErr(err)
+		fqr.Reader = bufio.NewReader(gzipReader)
+	} else {
+		// get buffered reader
+		barReader := bar.NewProxyReader(fileReader)
+		fqr.Reader = bufio.NewReader(barReader)
+	}
+
+	return &fqr, bar
 }
