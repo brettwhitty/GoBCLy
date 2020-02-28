@@ -1,8 +1,11 @@
+GoBCLy
+gobcly
 *.gz
 *.bak
 hikeeba-personafi
 hikeeba
 work/*
 dev/*
+dist/*
 test/**.hsdb
 *.tmp
