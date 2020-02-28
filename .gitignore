@@ -1,5 +1,6 @@
 GoBCLy
 gobcly
+gobcly.darwin_amd64
 *.gz
 *.bak
 hikeeba-personafi
