@@ -1,4 +1,4 @@
-*.fastq.gz
+*.gz
 hikeeba-personafi
 hikeeba
 work/*
