@@ -10,3 +10,7 @@ dev/*
 dist/*
 test/**.hsdb
 *.tmp
+main.go.saved
+.vscode/tasks.json
+vendor/github.com/flier/gohs/hyperscan/hs.h
+hs.h
