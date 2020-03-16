@@ -2,7 +2,11 @@
 *.bak
 hikeeba-personafi
 hikeeba
+gobcly
+gobcly.darwin_amd64
+gobcly.linux_amd64
 work/*
 dev/*
 test/**.hsdb
+data/**.hsdb
 *.tmp
