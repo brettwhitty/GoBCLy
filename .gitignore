@@ -1,3 +1,6 @@
+GoBCLy
+gobcly
+gobcly.darwin_amd64
 *.gz
 *.bak
 hikeeba-personafi
@@ -7,6 +10,11 @@ gobcly.darwin_amd64
 gobcly.linux_amd64
 work/*
 dev/*
+dist/*
 test/**.hsdb
 data/**.hsdb
 *.tmp
+main.go.saved
+.vscode/tasks.json
+vendor/github.com/flier/gohs/hyperscan/hs.h
+hs.h

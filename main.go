@@ -115,7 +115,6 @@ func init() {
 	fileWriters = make(GzipWriters)
 
 //	box := packr.NewBox("./.packr")
-
 	flag.Parse()
 
 	// setting DebugFlag = false will cause parameters
@@ -525,6 +524,11 @@ func main() {
 				bar.Finish()
 
 				log.Debug(fmt.Sprintf("%d %d", seqCountR1, seqCountR2))
+
+				// close any open gzip filewriters
+				for _, fw := range fileWriters {
+					fw.Close()
+				}
 
 				// close any open gzip filewriters
 				for _, fw := range fileWriters {
