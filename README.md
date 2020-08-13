@@ -1,7 +1,7 @@
 # GoBCLy
-Development version of a HIKEEBA tool...
-
 POC code for specific streaming demultiplexing applications; contact author for more details.
+
+(Development version of a HIKEEBA tool...)
 
 Requires Go 1.12+, Hyperscan 5.3+ plus dependencies, if statisfied:
 
