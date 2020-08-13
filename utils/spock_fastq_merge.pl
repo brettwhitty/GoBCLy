@@ -5,6 +5,8 @@ use warnings;
 
 $| = 1;
 
+## Brett Whitty <brettwhitty@gmail.com>, all rights retained
+
 use Cwd qw{ abs_path };
 use File::Temp qw{ tmpnam };
 use Getopt::Long;
