@@ -18,12 +18,21 @@ github.com/fatih/color
 # github.com/flier/gohs v1.0.1-0.20190723163601-5fb1d514984e
 ## explicit
 github.com/flier/gohs/hyperscan
+# github.com/gobuffalo/envy v1.7.0
+github.com/gobuffalo/envy
+# github.com/gobuffalo/packd v0.3.0
+github.com/gobuffalo/packd
+github.com/gobuffalo/packd/internal/takeon/github.com/markbates/errx
+# github.com/gobuffalo/packr v1.30.1
+## explicit
+github.com/gobuffalo/packr
 # github.com/hashicorp/errwrap v1.0.0
 github.com/hashicorp/errwrap
 # github.com/hashicorp/go-multierror v1.0.0
 github.com/hashicorp/go-multierror
+# github.com/joho/godotenv v1.3.0
+github.com/joho/godotenv
 # github.com/konsorten/go-windows-terminal-sequences v1.0.2
-## explicit
 github.com/konsorten/go-windows-terminal-sequences
 # github.com/mattn/go-colorable v0.1.6
 ## explicit
@@ -33,6 +42,10 @@ github.com/mattn/go-isatty
 # github.com/mattn/go-runewidth v0.0.8
 ## explicit
 github.com/mattn/go-runewidth
+# github.com/rogpeppe/go-internal v1.3.0
+github.com/rogpeppe/go-internal/modfile
+github.com/rogpeppe/go-internal/module
+github.com/rogpeppe/go-internal/semver
 # github.com/sirupsen/logrus v1.4.2
 ## explicit
 github.com/sirupsen/logrus
