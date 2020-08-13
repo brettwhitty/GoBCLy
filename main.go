@@ -1,58 +1,69 @@
 /*
- * hikeeba-personafi.go
+ *   Copyright (c) 2020
+ *   All rights reserved.
+ */
+
+package main
+
+/*
+ * hikeeba.go
  *
- * Based on 'simplegrep.go' example.
+ * HIKEEBA! GoBCLy
+ * => FASTQ "floating barcodes" demultiplexing functionality
  *
- * Use hyperscan to fuzzy regex match flanking sequences
- * for subsequent processing.
+ * ( TODO: factor this out into a 'hikeeba gobcly fastq' sub-command using cobra )
  *
- * Brett Whitty <bwhitty@pgdx.com>
+ * 2019-20, Brett Whitty <bwhitty@pgdx.com>
  *
  */
-package main
 
 import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"crypto/md5"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"regexp"
-	_ "runtime"
 	"strconv"
 	"strings"
-
-	"crypto/md5"
-	"encoding/hex"
-
 	//hyperscan
-	"github.com/flier/gohs/hyperscan"
-
-	//Heng Li's FASTQ file reader
-	//"github.com/biogo/biogo/io/seqio/fasta"
-	"github.com/drio/drio.go/bio/fasta"
-
+	//Heng Li's FASTQ file reader => not using
 	// logging
-	log "github.com/sirupsen/logrus"
-
-	// progress bar DEBUG
-	"github.com/cheggaaa/pb/v3"
+	// progress bar
+	// DEBUG: not used
+	_ "runtime"
 	_ "time"
 	//^^^^^^^^^^^^^^^^
+	//
 
+	"github.com/flier/gohs/hyperscan"
+	// TODO: re-evaluate FASTQ readers vs. line reading
+	//"github.com/biogo/biogo/io/seqio/fasta"
+	"github.com/cheggaaa/pb/v3"
 	_ "github.com/davecgh/go-spew/spew" //debugging
+	"github.com/drio/drio.go/bio/fasta"
+	_ "github.com/gobuffalo/packr"
+	log "github.com/sirupsen/logrus"
 )
 
 var (
-	// to be set during build
+	// Binary = Compile-time name of binary
 	Binary    string
+	// Cmd = Compile-time name of command; TODO: TEMP for debug
 	Cmd       string = "GoBCLy"
-	Version   string
+	// Version = Compile-time version string
+	Version   string            
+	// BuildDate = Compile-time date string
 	BuildDate string
+	// DebugFlag = Compile-time debug string
 	DebugFlag string
+	              // Debug flag
 	Debug     bool
 
 	// flags
@@ -60,8 +71,6 @@ var (
 	// input flags
 	flagR1File       = flag.String("r1", "", "Path to R1 file.")
 	flagR2File       = flag.String("r2", "", "Path to R2 file.")
-	flagI1File       = flag.String("i1", "", "Path to I1 file.")
-	flagI2File       = flag.String("i2", "", "Path to I2 file.")
 	flagPatternsFile = flag.String("p", "", "Path to Hyperscan-complatible PCRE patterns table file.")
 
 	// database flags
@@ -75,33 +84,37 @@ var (
 	flagRevComp = flag.Bool("r", false, "Reverse-complement output.")
 	// => FASTQ output options
 	flagFASTQOut  = flag.Bool("q", false, "Print FASTQ output.")
-	flagFASTQMSeq = flag.Bool("m", false, "Include matched sequence in FASTQ / ID output formats.")
+	flagFASTQMSeq = flag.Bool("m", true, "Include matched sequence in FASTQ / ID output formats.")
 	// generic match output
-	flagPrintId    = flag.Bool("i", false, "Print ID of sequence record.")
-	flagByteOffset = flag.Bool("b", false, "Display offset in bytes of a matched pattern.")
+	flagPrintID    = flag.Bool("i", false, "Print ID of sequence record.")
+//	flagByteOffset = flag.Bool("b", false, "Display offset in bytes of a matched pattern.")
 
 	// logging / debug options
-	flagNoColor   = flag.Bool("C", false, "Disable colorized output.")
-	flagDebug     = flag.Bool("d", false, "Debug mode.")
-	flagSilent    = flag.Bool("s", false, "Silent mode.")
-	flagBenchmark = flag.Bool("B", false, "Benchmarking mode.")
-
-	// for storing pointers to io.Writers
-	fileWriter []io.Writer
+	flagNoColor = flag.Bool("C", false, "Disable colorized output.")
+	flagDebug   = flag.Bool("d", false, "Debug mode.")
+	flagSilent  = flag.Bool("s", false, "Silent mode.")
+	
+	// fileWriters map of GzipWriters
+	fileWriters GzipWriters
 )
-
+// InputSet = Set of required files for validation purposes
 type InputSet struct {
 	R1Filepath   string
-	I1Filepath   string
 	R2Filepath   string
-	I2Filepath   string
 	PatternsFile string
 	OK           bool
-}
+} // TODO: this isn't necessary, remove later
 
-var theme = func(s string) string { return s }
+	// GzipWriters for storing pointers to io.Writers
+	type GzipWriters map[uint]*gzip.Writer
+	// => index type 'uint' here matches 'id' type of hyperscan match
+
+	var theme = func(s string) string { return s }
 
 func init() {
+	fileWriters = make(GzipWriters)
+
+//	box := packr.NewBox("./.packr")
 	flag.Parse()
 
 	// setting DebugFlag = false will cause parameters
@@ -155,31 +168,28 @@ func highlight(s string) string {
 	//    return s
 }
 
-// Record contains the data from a fasta fastq record
+// FASTQRecord contains the data from a fasta fastq record
 type FASTQRecord struct {
-	Name, Seq, Qual, Type string
+	InputFileBasename, Name, Seq, Qual string
 }
 
+// DemuxRecord probably isn't necessary
 type DemuxRecord struct {
 	R1 FASTQRecord
-	I1 FASTQRecord
 	R2 FASTQRecord
-	I2 FASTQRecord
-}
+} // TODO: remove this
 
+// DemuxReaders also probably aren't needed
 type DemuxReaders struct {
 	R1 *fasta.FqReader
-	I1 *fasta.FqReader
 	R2 *fasta.FqReader
-	I2 *fasta.FqReader
-}
+} //TODO: remove this
 
+// DemuxScratch hyperscan scratch space
 type DemuxScratch struct {
 	R1 *hyperscan.Scratch
-	I1 *hyperscan.Scratch
 	R2 *hyperscan.Scratch
-	I2 *hyperscan.Scratch
-}
+} //TODO: remove this
 
 var demuxSet [4]FASTQRecord
 
@@ -193,73 +203,102 @@ var demuxSet [4]FASTQRecord
  * to pass in the pattern that was being searched for so we can print it out.
  */
 func eventHandler(id uint, from, to uint64, flags uint, context interface{}) error {
+
+	//context.(FASTQRecord).Seq
+	fastq := FASTQRecord{context.(FASTQRecord).InputFileBasename, context.(FASTQRecord).Name, context.(FASTQRecord).Seq, context.(FASTQRecord).Qual}
+	//fastq := FASTQRecord{InputFileBasename: "R1", Name: fqR1.Name, Seq: fqR1.Seq, Qual: fqR1.Qual}
+	
 	// TODO: can maybe be optimized
-	inputData := []byte(strings.TrimSpace(context.(FASTQRecord).Seq) + "\n")
-	inputQual := []byte(strings.TrimSpace(context.(FASTQRecord).Qual) + "\n")
+	//inputBasename := []byte(strings.TrimSpace(context.(FASTQRecord).FileBasename) + "\n")
+	inputData := []byte(strings.TrimSpace(fastq.Seq) + "\n")
+	inputQual := []byte(strings.TrimSpace(fastq.Qual) + "\n")
 
-	start := bytes.LastIndexByte(inputData[:from], '\n')
-	end := int(to) + bytes.IndexByte(inputData[to:], '\n')
-
-	if start == -1 {
-		start = 0
+	// determine match start and end positions
+	matchStartPos := bytes.LastIndexByte(inputData[:from], '\n')
+	// fix start bounds
+	if matchStartPos == -1 {
+		matchStartPos = 0
 	} else {
-		start += 1
+		matchStartPos++
+	}
+	matchEndPos := int(to) + bytes.IndexByte(inputData[to:], '\n')
+	// fix end bounds
+	if matchEndPos == -1 {
+		matchEndPos = len(inputData)
 	}
 
-	if end == -1 {
-		end = len(inputData)
-	}
-
+	/*
+	TODO: remove or find some use for this
+	
 	if *flagByteOffset {
-		fmt.Printf("%d: ", start)
+		fmt.Printf("%d: ", matchStartPos)
 	}
+	*/
 
-	seqLeftString := string(inputData[:from])
-	seqMatchString := string(inputData[from:to])
-	seqRightString := string(inputData[to:end])
-	qualLeftString := string(inputQual[:from])
-	qualMatchString := string(inputQual[from:to])
-	qualRightString := string(inputQual[to:end])
+	var seqLeftString, qualLeftString, seqMatchString, qualMatchString, seqRightString, qualRightString string
 
+	// optionally trim sequence left / upstream of match
 	if *flagLTrim {
 		seqLeftString = ""
 		qualLeftString = ""
+	} else {
+		seqLeftString = string(inputData[:from])
+		qualLeftString = string(inputQual[:from])
 	}
-	if *flagRTrim {
-		seqRightString = ""
-		qualRightString = ""
-	}
+	// optionally trim sequence that was matched
+	// TODO: masking options
 	if *flagMTrim {
 		seqMatchString = ""
 		qualMatchString = ""
+	} else {
+		seqMatchString = string(inputData[from:to])
+		qualMatchString = string(inputQual[from:to])
 	}
-
-	// support modes later
+	// optionally trim sequence right / downstream of match
+	if *flagRTrim {
+		seqRightString = ""
+		qualRightString = ""
+	} else {
+		seqRightString = string(inputData[to:matchEndPos])
+		qualRightString = string(inputQual[to:matchEndPos])
+	}
+	
+	// prepare output strings for writing
+	// TODO: mode specific?
 	outSeq := seqLeftString + seqMatchString + seqRightString
 	outQual := qualLeftString + qualMatchString + qualRightString
-	outName := context.(FASTQRecord).Name
+	outName := fastq.Name
 
-	reId := regexp.MustCompile(`^@(\S+)`)
-	outId := reId.FindStringSubmatch(outName)[1]
-
+	// reverse complement the output if user requested
 	if *flagRevComp {
 		outSeq = reverseComplementDNA(outSeq)
 		outQual = reverse(outQual)
 	}
 
+	// use a regex to parse out FASTQ read ID
+	// TODO: Fix this hack; this is FASTQ specific
+	reID := regexp.MustCompile(`^@(\S+)`)
+	outID := reID.FindStringSubmatch(outName)[1]
+
 	if *flagFASTQOut {
+		if fileWriters[id] == nil {
+			outputGzFastqFile := fastq.InputFileBasename + "." + fmt.Sprintf("%d", id) + ".hs_dmux.fastq.gz"
+			fileWriters[id] = getGzWriter(outputGzFastqFile)
+		}
+		gzWriter := fileWriters[id]
+
 		matchSeq := ""
 		if *flagFASTQMSeq {
 			matchSeq = " " + seqMatchString
 		}
-		//fmt.Printf("%s\n%s\n%s\n%s\n", outName, outSeq, "+"+outId+" "+fmt.Sprint(id)+":"+seqMatchString, outQual)
-		fmt.Printf("%s\n%s\n%s\n%s\n", outName, outSeq, "+"+outId+" "+fmt.Sprint(id)+":"+fmt.Sprint(from)+"-"+fmt.Sprint(to)+matchSeq, outQual)
-	} else if *flagPrintId {
+		//fmt.Printf("%s\n%s\n%s\n%s\n", outName, outSeq, "+"+outID+" "+fmt.Sprint(id)+":"+seqMatchString, outQual)
+		gzWriter.Write([]byte(fmt.Sprintf("%s\n%s\n%s\n%s\n", outName, outSeq, "+"+outID+" "+fmt.Sprint(id)+":"+fmt.Sprint(from)+"-"+fmt.Sprint(to)+matchSeq, outQual)))
+	} else if *flagPrintID {
 		matchSeq := ""
 		if *flagFASTQMSeq {
 			matchSeq = " " + seqMatchString
 		}
-		fmt.Printf("%s\n", outId+" "+fmt.Sprint(id)+":"+fmt.Sprint(from)+"-"+fmt.Sprint(to)+matchSeq)
+		fmt.Printf("%s %s\n", fastq.InputFileBasename, outID+" "+fmt.Sprint(id)+":"+fmt.Sprint(from)+"-"+fmt.Sprint(to)+matchSeq)
 	} else {
 
 		// DEBUG fmt.Printf("start=%d, end=%d, from=%d, to=%d\n", start, end, from, to)
@@ -289,9 +328,8 @@ func main() {
 		fmt.Fprint(os.Stderr, highlight("HIKEEBA!")+" "+cyan(Cmd)+" "+"["+fmt.Sprintf("%s %s(%s) DEBUG=%t", Binary, Version, BuildDate, Debug)+"] // Brett Whitty <bwhitty@pgdx.com>\n")
 	}
 
-	if *flagR1File == "" || *flagI1File == "" || *flagR2File == "" || *flagI2File == "" {
-		//fmt.Fprintf(os.Stderr, "Usage: %s ["+green("flags")+"] <"+cyan("pattern file")+"> <"+cyan("input file")+">\n", highlight(Binary))
-		fmt.Fprintf(os.Stderr, "Usage: %s ["+green("flags")+"]\n", highlight(Binary))
+	if *flagR1File == "" || *flagR2File == "" {
+		fmt.Fprintf(os.Stderr, "Usage: %s ["+green("flags")+"] <"+cyan("pattern file")+"> <"+cyan("input file")+">\n", highlight(Binary))
 		flag.PrintDefaults()
 		os.Exit(-1)
 	}
@@ -319,7 +357,7 @@ func main() {
 	// TODO: legacy
 	//inputFN := *flagR1File
 
-	inputSet := InputSet{*flagR1File, *flagI1File, *flagR2File, *flagI2File, *flagPatternsFile, false}
+	inputSet := InputSet{*flagR1File, *flagR2File, *flagPatternsFile, false}
 
 	// TODO:	log.
 
@@ -334,9 +372,17 @@ func main() {
 
 	//	var dFQR DemuxReaders
 	readerR1, bar := getFQReader(inputSet.R1Filepath, true)
-	readerI1, _ := getFQReader(inputSet.I1Filepath, false)
 	readerR2, _ := getFQReader(inputSet.R2Filepath, false)
-	readerI2, _ := getFQReader(inputSet.I2Filepath, false)
+
+	// TODO: fix this hack
+	r1FileBasename, r1OK := getGzFastqBasename(inputSet.R1Filepath)
+	if !r1OK {
+		log.Fatal("R1 file doesn't have '.fastq.gz' suffix as expected!")
+	}
+	r2FileBasename, r2OK := getGzFastqBasename(inputSet.R2Filepath)
+	if !r2OK {
+		log.Fatal("R2 file doesn't have '.fastq.gz' suffix as expected!")
+	}
 
 	//	totalBytes := bytesR1 + bytesI1 + bytesR2 + bytesI2
 	//	bar = pb.Full.Start64(totalBytes)
@@ -444,18 +490,12 @@ func main() {
 	// scratch clones for demux threads
 	demuxScratch.R1, err = scratch.Clone()
 	checkErr(err)
-	demuxScratch.I1, err = scratch.Clone()
-	checkErr(err)
 	demuxScratch.R2, err = scratch.Clone()
-	checkErr(err)
-	demuxScratch.I2, err = scratch.Clone()
 	checkErr(err)
 
 	doneCount := 0
 	seqCountR1 := 0
-	seqCountI1 := 0
 	seqCountR2 := 0
-	seqCountI2 := 0
 	for {
 		/*
 			R1
@@ -464,21 +504,10 @@ func main() {
 		if doneR1 {
 			doneCount++
 		}
-		rR1 := FASTQRecord{Name: fqR1.Name, Seq: fqR1.Seq, Qual: fqR1.Qual}
+		rR1 := FASTQRecord{InputFileBasename: r1FileBasename, Name: fqR1.Name, Seq: fqR1.Seq, Qual: fqR1.Qual}
 		log.Debug(rR1.Name)
 		scanFastqRecord(database, demuxScratch.R1, rR1)
 		seqCountR1++
-		/*
-			I1
-		*/
-		fqI1, doneI1 := readerI1.Iter()
-		if doneI1 {
-			doneCount++
-		}
-		rI1 := FASTQRecord{Name: fqI1.Name, Seq: fqI1.Seq, Qual: fqI1.Qual}
-		log.Debug(rI1.Name)
-		scanFastqRecord(database, demuxScratch.I1, rI1)
-		seqCountI1++
 		/*
 			R2
 		*/
@@ -486,31 +515,29 @@ func main() {
 		if doneR2 {
 			doneCount++
 		}
-		rR2 := FASTQRecord{Name: fqR2.Name, Seq: fqR2.Seq, Qual: fqR2.Qual}
+		rR2 := FASTQRecord{InputFileBasename: r2FileBasename, Name: fqR2.Name, Seq: fqR2.Seq, Qual: fqR2.Qual}
 		log.Debug(rR2.Name)
 		scanFastqRecord(database, demuxScratch.R2, rR2)
 		seqCountR2++
-		/*
-			I2
-		*/
-		fqI2, doneI2 := readerI2.Iter()
-		if doneI2 {
-			doneCount++
-		}
-		rI2 := FASTQRecord{Name: fqI2.Name, Seq: fqI2.Seq, Qual: fqI2.Qual}
-		log.Debug(rI2.Name)
-		scanFastqRecord(database, demuxScratch.I2, rI2)
-		seqCountI2++
-
 		if doneCount >= 1 {
-			if doneCount == 4 {
+			if doneCount == 2 {
 				bar.Finish()
 
-				log.Debug(fmt.Sprintf("%d %d %d %d", seqCountR1, seqCountI1, seqCountR2, seqCountI2))
+				log.Debug(fmt.Sprintf("%d %d", seqCountR1, seqCountR2))
+
+				// close any open gzip filewriters
+				for _, fw := range fileWriters {
+					fw.Close()
+				}
+
+				// close any open gzip filewriters
+				for _, fw := range fileWriters {
+					fw.Close()
+				}
 
 				break
 			} else {
-				log.Error(fmt.Sprintf("%d %d %d %d", seqCountR1, seqCountI1, seqCountR2, seqCountI2))
+				log.Error(fmt.Sprintf("%d %d", seqCountR1, seqCountR2))
 				log.Fatal("Encountered input file record mismatch!!!")
 				os.Exit(-1)
 			}
@@ -655,7 +682,7 @@ func parseFile(filename string) (patterns []*hyperscan.Pattern) {
 		}
 
 		line = strings.TrimSpace(line)
-		lineno += 1
+		lineno++
 
 		// if line is empty, or a comment, we can skip it
 		if len(line) == 0 || line[0] == '#' {
@@ -665,7 +692,6 @@ func parseFile(filename string) (patterns []*hyperscan.Pattern) {
 		// otherwise, it should be ID:PCRE, e.g.
 		//  10001:/foobar/is
 		strs := strings.SplitN(line, ":", 2)
-
 		// TODO: Need to add support for parsing extended attribute flags...
 		//  10001:/foobar/is{key1=value1,key2=value2,...}
 
@@ -705,7 +731,7 @@ func blockDatabaseFromFile(filename string) hyperscan.BlockDatabase {
 
 	// short circuit compiling if we already have a serialized db
 	if fileExists(dbFilename) {
-		log.Info("Serialized pattern DB exists, use '-c' flag to recompile from text.")
+		log.Debug("Serialized pattern DB exists, use '-c' flag to recompile from text.")
 		log.Info(fmt.Sprintf("Reading from pattern DB file: %s", dbFilename))
 		return readDbFile(dbFilename)
 	}
@@ -785,7 +811,7 @@ func writeDbFile(dbFilename string, database hyperscan.BlockDatabase) {
 func getGzWriter(filename string) *gzip.Writer {
 	// open a filehandle for writing the file
 	outFile, err := os.Create(filename)
-	checkErr(err, fmt.Sprintf("Couldn't open file '%s' for writing! %s", outFile, err))
+	checkErr(err, fmt.Sprintf("Couldn't open file '%s' for writing! %s", filename, err))
 
 	// create gzip stream writer
 	gzWriter, err := gzip.NewWriterLevel(outFile, gzip.BestCompression)
@@ -876,17 +902,29 @@ func getFQReader(filename string, wantBar bool) (*fasta.FqReader, *pb.ProgressBa
 
 // cut and paste md5 checksum code
 func getFileMD5(filePath string) (string, error) {
-	var fileMd5Sum string
+	var fileDigest string
 	file, err := os.Open(filePath)
 	if err != nil {
-		return fileMd5Sum, err
+		return fileDigest, err
 	}
 	defer file.Close()
 	hash := md5.New()
 	if _, err := io.Copy(hash, file); err != nil {
-		return fileMd5Sum, err
+		return fileDigest, err
 	}
 	hashInBytes := hash.Sum(nil)[:16]
-	fileMd5Sum = hex.EncodeToString(hashInBytes)
-	return fileMd5Sum, nil
+	fileDigest = hex.EncodeToString(hashInBytes)
+	return fileDigest, nil
+}
+
+// returns basename of a "*.fastq.gz" file,
+// or error if the file doesn't match
+func getGzFastqBasename (filePath string) (string, bool) {
+	// TODO: do this in a better way so it doesn't fail with caps (eg: regex)
+	base := strings.TrimSuffix(filePath, ".fastq.gz")
+	if base == filePath {
+		return "", false 
+	}
+
+	return filepath.Base(base), true
 }

@@ -48,10 +48,12 @@ clean:
 	if [ -f ${BINARY} ] ; then rm ${BINARY} ; fi
 	if [ -f ${DISTBIN} ] ; then rm ${DISTBIN} && rmdir ${DIST} ; fi
 
+dist: export CGO_CFLAGS="-I/usr/local/Cellar/hyperscan/5.2.1/include/hs"
 dist: export GOOS=linux
 dist: export GOARCH=amd64
 dist: export BINARY=gobcly.linux_amd64
 dist: build
+	if [ -x upx ] ; then upx ${BINARY} ; fi
 	mkdir -p ${DIST}
 	mv ${BINARY} ${DISTBIN}
 
