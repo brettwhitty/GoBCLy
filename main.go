@@ -13,7 +13,7 @@ package main
  *
  * ( TODO: factor this out into a 'hikeeba gobcly fastq' sub-command using cobra )
  *
- * 2019-20, Brett Whitty <bwhitty@pgdx.com>
+ * 2019-20, Brett Whitty <brettwhitty@gmail.com>
  *
  */
 
@@ -32,24 +32,17 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	//hyperscan
-	//Heng Li's FASTQ file reader => not using
-	// logging
-	// progress bar
-	// DEBUG: not used
-	_ "runtime"
-	_ "time"
-	//^^^^^^^^^^^^^^^^
 	//
-
-	"github.com/flier/gohs/hyperscan"
+	"github.com/flier/gohs/hyperscan"  //hyperscan
 	// TODO: re-evaluate FASTQ readers vs. line reading
-	//"github.com/biogo/biogo/io/seqio/fasta"
-	"github.com/cheggaaa/pb/v3"
-	_ "github.com/davecgh/go-spew/spew" //debugging
 	"github.com/drio/drio.go/bio/fasta"
-	_ "github.com/gobuffalo/packr"
-	log "github.com/sirupsen/logrus"
+	//"github.com/biogo/biogo/io/seqio/fasta" //Heng Li's FASTQ file reader => not using
+	"github.com/cheggaaa/pb/v3" // progress bar
+	_ "github.com/davecgh/go-spew/spew" //debugging
+	_ "runtime" //debugging
+	_ "time" //debugging
+	_ "github.com/gobuffalo/packr" //TODO: re-evaluate using this
+	log "github.com/sirupsen/logrus" // logging
 )
 
 var (
@@ -63,10 +56,10 @@ var (
 	BuildDate string
 	// DebugFlag = Compile-time debug string
 	DebugFlag string
-	              // Debug flag
+	// Debug = Debug state flag
 	Debug     bool
 
-	// flags
+	// *** flags ***
 
 	// input flags
 	flagR1File       = flag.String("r1", "", "Path to R1 file.")
@@ -114,6 +107,7 @@ type InputSet struct {
 func init() {
 	fileWriters = make(GzipWriters)
 
+	// TODO: re-evaluate 'packr'
 //	box := packr.NewBox("./.packr")
 	flag.Parse()
 
@@ -193,35 +187,26 @@ type DemuxScratch struct {
 
 var demuxSet [4]FASTQRecord
 
-//type FASTQRecord interface {
-//}
-
-/**
- * This is the function that will be called for each match that occurs. @a ctx
- * is to allow you to have some application-specific state that you will get
- * access to for each match. In our simple example we're just going to use it
- * to pass in the pattern that was being searched for so we can print it out.
- */
 func eventHandler(id uint, from, to uint64, flags uint, context interface{}) error {
 
-	//context.(FASTQRecord).Seq
 	fastq := FASTQRecord{context.(FASTQRecord).InputFileBasename, context.(FASTQRecord).Name, context.(FASTQRecord).Seq, context.(FASTQRecord).Qual}
-	//fastq := FASTQRecord{InputFileBasename: "R1", Name: fqR1.Name, Seq: fqR1.Seq, Qual: fqR1.Qual}
 	
 	// TODO: can maybe be optimized
-	//inputBasename := []byte(strings.TrimSpace(context.(FASTQRecord).FileBasename) + "\n")
 	inputData := []byte(strings.TrimSpace(fastq.Seq) + "\n")
 	inputQual := []byte(strings.TrimSpace(fastq.Qual) + "\n")
 
 	// determine match start and end positions
 	matchStartPos := bytes.LastIndexByte(inputData[:from], '\n')
+
 	// fix start bounds
 	if matchStartPos == -1 {
 		matchStartPos = 0
 	} else {
 		matchStartPos++
 	}
+	
 	matchEndPos := int(to) + bytes.IndexByte(inputData[to:], '\n')
+	
 	// fix end bounds
 	if matchEndPos == -1 {
 		matchEndPos = len(inputData)
@@ -229,7 +214,6 @@ func eventHandler(id uint, from, to uint64, flags uint, context interface{}) err
 
 	/*
 	TODO: remove or find some use for this
-	
 	if *flagByteOffset {
 		fmt.Printf("%d: ", matchStartPos)
 	}
@@ -245,6 +229,7 @@ func eventHandler(id uint, from, to uint64, flags uint, context interface{}) err
 		seqLeftString = string(inputData[:from])
 		qualLeftString = string(inputQual[:from])
 	}
+	
 	// optionally trim sequence that was matched
 	// TODO: masking options
 	if *flagMTrim {
@@ -254,6 +239,7 @@ func eventHandler(id uint, from, to uint64, flags uint, context interface{}) err
 		seqMatchString = string(inputData[from:to])
 		qualMatchString = string(inputQual[from:to])
 	}
+	
 	// optionally trim sequence right / downstream of match
 	if *flagRTrim {
 		seqRightString = ""
@@ -291,7 +277,6 @@ func eventHandler(id uint, from, to uint64, flags uint, context interface{}) err
 		if *flagFASTQMSeq {
 			matchSeq = " " + seqMatchString
 		}
-		//fmt.Printf("%s\n%s\n%s\n%s\n", outName, outSeq, "+"+outID+" "+fmt.Sprint(id)+":"+seqMatchString, outQual)
 		gzWriter.Write([]byte(fmt.Sprintf("%s\n%s\n%s\n%s\n", outName, outSeq, "+"+outID+" "+fmt.Sprint(id)+":"+fmt.Sprint(from)+"-"+fmt.Sprint(to)+matchSeq, outQual)))
 	} else if *flagPrintID {
 		matchSeq := ""
@@ -300,10 +285,6 @@ func eventHandler(id uint, from, to uint64, flags uint, context interface{}) err
 		}
 		fmt.Printf("%s %s\n", fastq.InputFileBasename, outID+" "+fmt.Sprint(id)+":"+fmt.Sprint(from)+"-"+fmt.Sprint(to)+matchSeq)
 	} else {
-
-		// DEBUG fmt.Printf("start=%d, end=%d, from=%d, to=%d\n", start, end, from, to)
-		// DEBUG fmt.Printf("%s%s%s\n", inputData[start:from], theme(string(inputData[from:to])), inputData[to:end])
-		//		fmt.Printf("%s%s\n", theme(string(inputData[from:to])), inputData[to:end])
 		fmt.Printf("%s%s%s\n", seqLeftString, theme(seqMatchString), seqRightString)
 	}
 
@@ -311,29 +292,14 @@ func eventHandler(id uint, from, to uint64, flags uint, context interface{}) err
 }
 
 func main() {
-	/*
-		// TEST CODE FOR BUILDING DATABASE FROM MULTIPLE EXPRESSIONS
-		b := hyperscan.DatabaseBuilder{}
-		db, err := b.AddExpressions("101:/abc/Q", "102:/def/Q", "/(101&102)/Co").Build()
-		info, err := db.Info()
-		mode, err := info.Mode()
-		spew.Dump(b, db, info, mode)
-		db.Close()
-		// ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-	*/
-
-	//panic(fmt.Sprintf("PANIC!\n"))
-
 	if !*flagSilent {
 		fmt.Fprint(os.Stderr, highlight("HIKEEBA!")+" "+cyan(Cmd)+" "+"["+fmt.Sprintf("%s %s(%s) DEBUG=%t", Binary, Version, BuildDate, Debug)+"] // Brett Whitty <bwhitty@pgdx.com>\n")
 	}
-
 	if *flagR1File == "" || *flagR2File == "" {
 		fmt.Fprintf(os.Stderr, "Usage: %s ["+green("flags")+"] <"+cyan("pattern file")+"> <"+cyan("input file")+">\n", highlight(Binary))
 		flag.PrintDefaults()
 		os.Exit(-1)
 	}
-
 	if !*flagNoColor {
 		// enable color if supported, unless disabled by flag
 		stat, _ := os.Stdout.Stat()
@@ -350,27 +316,8 @@ func main() {
 	//pattern := hyperscan.NewPattern(flag.Arg(0), hyperscan.SomLeftMost|hyperscan.Caseless)
 	patternFile := *flagPatternsFile
 
-	//    spew.Dump(hyperscan.ExpressionInfo(pattern.Expression))
-	//   return
-
-	// input file
-	// TODO: legacy
-	//inputFN := *flagR1File
-
 	inputSet := InputSet{*flagR1File, *flagR2File, *flagPatternsFile, false}
 
-	// TODO:	log.
-
-	// TODO: new
-	//	inputR1File := *flagR1File
-	//	inputI1File := *flagI1File
-	//	inputR2File := *flagR2File
-	//	inputI2File := *flagI2File
-
-	//	var barR1, barI1, barR2, barI2 int64
-	//	var bar *pb.ProgressBar
-
-	//	var dFQR DemuxReaders
 	readerR1, bar := getFQReader(inputSet.R1Filepath, true)
 	readerR2, _ := getFQReader(inputSet.R2Filepath, false)
 
@@ -384,103 +331,12 @@ func main() {
 		log.Fatal("R2 file doesn't have '.fastq.gz' suffix as expected!")
 	}
 
-	//	totalBytes := bytesR1 + bytesI1 + bytesR2 + bytesI2
-	//	bar = pb.Full.Start64(totalBytes)
-
-	// TODO: factor this out into 'getFileType'
-
-	// input is STDIN?
-	//	isSTDIN := strings.EqualFold("/dev/stdin", inputFN) || strings.EqualFold("stdin", inputFN) || strings.EqualFold("-", inputFN)
-
-	// check if input is gzipped
-	//	isGzip, err := regexp.MatchString(`\.gz$`, inputFN)
-	//	checkErr(err)
-
-	// TODO: move this into some sort of file integrity check?
-	// file size in bytes
-	//	var inputFileSizeBytes int64 = 0
-
-	// TODO: ADD EDIT / HAMMING DISTANCE SUPPORT!!!
-
-	//pattern.HammingDistance := 1
-
-	/* First, we attempt to compile the pattern provided on the command line.
-	 * We assume 'DOTALL' semantics, meaning that the '.' meta-character will
-	 * match newline characters. The compiler will analyse the given pattern and
-	 * either return a compiled Hyperscan database, or an error message
-	 * explaining why the pattern didn't compile.
-	 */
-	//database, err := hyperscan.NewBlockDatabase(pattern) // <= compile pattern
-	//if err != nil {
-	//	fmt.Fprintf(os.Stderr, "ERROR: Unable to compile pattern \"%s\": %s\n", pattern.String(), err.Error())
-	//	os.Exit(-1)
-	//}
-
 	// Read our pattern set in and build Hyperscan databases from it.
 	log.Info(fmt.Sprintf("Pattern file: %s\n", patternFile))
 	//dbStreaming, dbBlock := databasesFromFile(patternFile)
 	database := blockDatabaseFromFile(patternFile)
 	defer database.Close()
 
-	/* if false {
-		var inFile *os.File
-		// open file for reading
-		if isSTDIN {
-			// input is STDIN
-			inFile = os.Stdin
-		} else {
-			inputFileSizeBytes = getFileSizeInBytes(inputFN)
-
-			// input is normal file
-			inFile, err = os.Open(inputFN)
-			checkErr(err)
-		}
-		defer inFile.Close()
-
-		var fileReader io.Reader
-
-		if *flagSilent {
-			fileReader = inFile
-		} else {
-			bar = pb.Full.Start64(inputFileSizeBytes)
-			//inFile = bar.NewProxyReader(inFile).(io.Reader)
-			fileReader = bar.NewProxyReader(inFile)
-			defer bar.Finish()
-		}
-
-		// set up a FASTQ reader, supporting gz'd stream
-		var fqr fasta.FqReader
-		if isGzip {
-			//		barReader := bar.NewProxyReader(inFile)
-			gzipReader, err := gzip.NewReader(fileReader)
-			checkErr(err)
-			fqr.Reader = bufio.NewReader(gzipReader)
-		} else {
-			// get buffered reader
-			barReader := bar.NewProxyReader(fileReader)
-			fqr.Reader = bufio.NewReader(barReader)
-		}
-
-	}
-	// buffer to store the sequence data for scanning
-	//var inputData []byte
-
-	/* Finally, we issue a call to hs_scan, which will search the input buffer
-	 * for the pattern represented in the bytecode. Note that in order to do
-	 * this, scratch space needs to be allocated with the hs_alloc_scratch
-	 * function. In typical usage, you would reuse this scratch space for many
-	 * calls to hs_scan, but as we're only doing one, we'll be allocating it
-	 * and deallocating it as soon as our matching is done.
-	 *
-	 * When matches occur, the specified callback function (eventHandler in
-	 * this file) will be called. Note that although it is reminiscent of
-	 * asynchronous APIs, Hyperscan operates synchronously: all matches will be
-	 * found, and all callbacks issued, *before* hs_scan returns.
-	 *
-	 * In this example, we provide the input pattern as the context pointer so
-	 * that the callback is able to print out the pattern that matched on each
-	 * match event.
-	*/
 	scratch, err := hyperscan.NewScratch(database)
 	checkErr(err, fmt.Sprintf("Unable to allocate scratch space. Exiting."))
 	defer scratch.Free()
@@ -542,66 +398,21 @@ func main() {
 				os.Exit(-1)
 			}
 		}
-
-		// will pass this into the eventHandler
-		//		recordR1 := FASTQRecord{Name: rI1.Name, Seq: r.Seq, Qual: r.Qual}
-
-		//go func() {
-
-		// create byte buffer from FASTQ record sequence string
-		// => strings.TrimSpace() may be overkill here
-		// eventHandler is expecting input is a line terminated with "\n"
-		//inputData := []byte(strings.TrimSpace(record.Seq) + "\n")
-
-		// prepare demux recordset for output
-		//recordSet := DemuxRecord{record, record, record, record}
-		//		recordSet := DemuxRecord{rR1, rI1, rR2, rI2}
-
-		//		for _, record := range []FASTQRecord{recordSet.R1, recordSet.I1, recordSet.R2, recordSet.I2} {
-
-		//			scanFastqRecord(database, scratch, record)
-		//		fmt.Fprintf(os.Stderr, "%d: %s\n", lineCount, inputData)
-		//fmt.Fprintf(os.Stderr, "Scanning %d bytes with Hyperscan\n", len(inputData))
-
-		///		if err := database.Scan(inputData, scratch, eventHandler, record); err != nil {
-		//			fmt.Fprint(os.Stderr, "ERROR: Unable to scan input buffer. Exiting.\n")
-		//			os.Exit(-1)
-		//		}
-
-		//		}
-
-		//}()
 	}
-
-	/* Scanning is complete, any matches have been handled, so now we just
-	 * clean up and exit.
-	 */
 
 	return
 }
 
 func scanFastqRecord(database hyperscan.BlockDatabase, scratch *hyperscan.Scratch, record FASTQRecord) {
-
-	//var demuxRecordKeys = []string("R1","I1","R2","I2")
-
-	//	for i, k := range demuxRecordKeys {
-	//		record := demuxRecord[i]
-
 	// => strings.TrimSpace() may be overkill here
 	// eventHandler is expecting input is a line terminated with "\n"
 	inputData := []byte(strings.TrimSpace(record.Seq) + "\n")
-
-	//		fmt.Fprintf(os.Stderr, "%d: %s\n", lineCount, inputData)
-	//fmt.Fprintf(os.Stderr, "Scanning %d bytes with Hyperscan\n", len(inputData))
 
 	if err := database.Scan(inputData, scratch, eventHandler, record); err != nil {
 		log.Fatal("ERROR: Unable to scan input buffer. Exiting.")
 		os.Exit(-1)
 	}
-
 }
-
-//}
 
 func checkErr(err error, optMsg ...string) {
 	msg := ""
