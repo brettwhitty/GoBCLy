@@ -5,6 +5,8 @@ use warnings;
 
 $| = 1;
 
+## Brett Whitty <brettwhitty@gmail.com>, all rights retained
+
 my $patterns = {};
 my $pflags = {};
 my $pextflags = {};
