@@ -9,7 +9,7 @@ use warnings;
 ##
 ## For use with dbSNP-masked hg19, Motto, etc.
 ##
-## Brett Whitty <bwhitty@pgdx.com>
+## Brett Whitty <brettwhitty@gmail.com>, all rights retained
 
 use Getopt::Long;
 
