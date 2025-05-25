@@ -32,32 +32,34 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
 	//
-	"github.com/flier/gohs/hyperscan"  //hyperscan
+	"github.com/flier/gohs/hyperscan" //hyperscan
 	// TODO: re-evaluate FASTQ readers vs. line reading
 	"github.com/drio/drio.go/bio/fasta"
 	//"github.com/biogo/biogo/io/seqio/fasta" //Heng Li's FASTQ file reader => not using
-	"github.com/cheggaaa/pb/v3" // progress bar
-	_ "github.com/davecgh/go-spew/spew" //debugging
 	_ "runtime" //debugging
-	_ "time" //debugging
-	_ "github.com/gobuffalo/packr" //TODO: re-evaluate using this
-	log "github.com/sirupsen/logrus" // logging
+	_ "time"    //debugging
+
+	"github.com/cheggaaa/pb/v3"         // progress bar
+	_ "github.com/davecgh/go-spew/spew" //debugging
+	_ "github.com/gobuffalo/packr"      //TODO: re-evaluate using this
+	log "github.com/sirupsen/logrus"    // logging
 )
 
 var (
 	// Binary = Compile-time name of binary
-	Binary    string
+	Binary string
 	// Cmd = Compile-time name of command; TODO: TEMP for debug
-	Cmd       string = "GoBCLy"
+	Cmd string = "GoBCLy"
 	// Version = Compile-time version string
-	Version   string            
+	Version string
 	// BuildDate = Compile-time date string
 	BuildDate string
 	// DebugFlag = Compile-time debug string
 	DebugFlag string
 	// Debug = Debug state flag
-	Debug     bool
+	Debug bool
 
 	// *** flags ***
 
@@ -79,17 +81,18 @@ var (
 	flagFASTQOut  = flag.Bool("q", false, "Print FASTQ output.")
 	flagFASTQMSeq = flag.Bool("m", true, "Include matched sequence in FASTQ / ID output formats.")
 	// generic match output
-	flagPrintID    = flag.Bool("i", false, "Print ID of sequence record.")
-//	flagByteOffset = flag.Bool("b", false, "Display offset in bytes of a matched pattern.")
+	flagPrintID = flag.Bool("i", false, "Print ID of sequence record.")
+	//	flagByteOffset = flag.Bool("b", false, "Display offset in bytes of a matched pattern.")
 
 	// logging / debug options
 	flagNoColor = flag.Bool("C", false, "Disable colorized output.")
 	flagDebug   = flag.Bool("d", false, "Debug mode.")
 	flagSilent  = flag.Bool("s", false, "Silent mode.")
-	
+
 	// fileWriters map of GzipWriters
 	fileWriters GzipWriters
 )
+
 // InputSet = Set of required files for validation purposes
 type InputSet struct {
 	R1Filepath   string
@@ -98,17 +101,18 @@ type InputSet struct {
 	OK           bool
 } // TODO: this isn't necessary, remove later
 
-	// GzipWriters for storing pointers to io.Writers
-	type GzipWriters map[uint]*gzip.Writer
-	// => index type 'uint' here matches 'id' type of hyperscan match
+// GzipWriters for storing pointers to io.Writers
+type GzipWriters map[uint]*gzip.Writer
 
-	var theme = func(s string) string { return s }
+// => index type 'uint' here matches 'id' type of hyperscan match
+
+var theme = func(s string) string { return s }
 
 func init() {
 	fileWriters = make(GzipWriters)
 
 	// TODO: re-evaluate 'packr'
-//	box := packr.NewBox("./.packr")
+	//	box := packr.NewBox("./.packr")
 	flag.Parse()
 
 	// setting DebugFlag = false will cause parameters
@@ -190,7 +194,7 @@ var demuxSet [4]FASTQRecord
 func eventHandler(id uint, from, to uint64, flags uint, context interface{}) error {
 
 	fastq := FASTQRecord{context.(FASTQRecord).InputFileBasename, context.(FASTQRecord).Name, context.(FASTQRecord).Seq, context.(FASTQRecord).Qual}
-	
+
 	// TODO: can maybe be optimized
 	inputData := []byte(strings.TrimSpace(fastq.Seq) + "\n")
 	inputQual := []byte(strings.TrimSpace(fastq.Qual) + "\n")
@@ -204,19 +208,19 @@ func eventHandler(id uint, from, to uint64, flags uint, context interface{}) err
 	} else {
 		matchStartPos++
 	}
-	
+
 	matchEndPos := int(to) + bytes.IndexByte(inputData[to:], '\n')
-	
+
 	// fix end bounds
 	if matchEndPos == -1 {
 		matchEndPos = len(inputData)
 	}
 
 	/*
-	TODO: remove or find some use for this
-	if *flagByteOffset {
-		fmt.Printf("%d: ", matchStartPos)
-	}
+		TODO: remove or find some use for this
+		if *flagByteOffset {
+			fmt.Printf("%d: ", matchStartPos)
+		}
 	*/
 
 	var seqLeftString, qualLeftString, seqMatchString, qualMatchString, seqRightString, qualRightString string
@@ -229,7 +233,7 @@ func eventHandler(id uint, from, to uint64, flags uint, context interface{}) err
 		seqLeftString = string(inputData[:from])
 		qualLeftString = string(inputQual[:from])
 	}
-	
+
 	// optionally trim sequence that was matched
 	// TODO: masking options
 	if *flagMTrim {
@@ -239,7 +243,7 @@ func eventHandler(id uint, from, to uint64, flags uint, context interface{}) err
 		seqMatchString = string(inputData[from:to])
 		qualMatchString = string(inputQual[from:to])
 	}
-	
+
 	// optionally trim sequence right / downstream of match
 	if *flagRTrim {
 		seqRightString = ""
@@ -248,7 +252,7 @@ func eventHandler(id uint, from, to uint64, flags uint, context interface{}) err
 		seqRightString = string(inputData[to:matchEndPos])
 		qualRightString = string(inputQual[to:matchEndPos])
 	}
-	
+
 	// prepare output strings for writing
 	// TODO: mode specific?
 	outSeq := seqLeftString + seqMatchString + seqRightString
@@ -730,11 +734,11 @@ func getFileMD5(filePath string) (string, error) {
 
 // returns basename of a "*.fastq.gz" file,
 // or error if the file doesn't match
-func getGzFastqBasename (filePath string) (string, bool) {
+func getGzFastqBasename(filePath string) (string, bool) {
 	// TODO: do this in a better way so it doesn't fail with caps (eg: regex)
 	base := strings.TrimSuffix(filePath, ".fastq.gz")
 	if base == filePath {
-		return "", false 
+		return "", false
 	}
 
 	return filepath.Base(base), true

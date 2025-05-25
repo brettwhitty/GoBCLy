@@ -1,9 +1,8 @@
 # github.com/VividCortex/ewma v1.1.1
+## explicit
 github.com/VividCortex/ewma
-# github.com/cheggaaa/pb v2.0.7+incompatible
-## explicit
 # github.com/cheggaaa/pb/v3 v3.0.4
-## explicit
+## explicit; go 1.12
 github.com/cheggaaa/pb/v3
 github.com/cheggaaa/pb/v3/termutil
 # github.com/davecgh/go-spew v1.1.1
@@ -13,53 +12,44 @@ github.com/davecgh/go-spew/spew
 ## explicit
 github.com/drio/drio.go/bio/fasta
 # github.com/fatih/color v1.9.0
-## explicit
+## explicit; go 1.13
 github.com/fatih/color
-# github.com/flier/gohs v1.0.1-0.20190723163601-5fb1d514984e
-## explicit
+# github.com/flier/gohs v1.2.3
+## explicit; go 1.18
 github.com/flier/gohs/hyperscan
+github.com/flier/gohs/internal/handle
+github.com/flier/gohs/internal/hs
 # github.com/gobuffalo/envy v1.7.0
+## explicit
 github.com/gobuffalo/envy
 # github.com/gobuffalo/packd v0.3.0
+## explicit; go 1.12
 github.com/gobuffalo/packd
 github.com/gobuffalo/packd/internal/takeon/github.com/markbates/errx
 # github.com/gobuffalo/packr v1.30.1
-## explicit
+## explicit; go 1.12
 github.com/gobuffalo/packr
-# github.com/hashicorp/errwrap v1.0.0
-github.com/hashicorp/errwrap
-# github.com/hashicorp/go-multierror v1.0.0
-github.com/hashicorp/go-multierror
 # github.com/joho/godotenv v1.3.0
-github.com/joho/godotenv
-# github.com/konsorten/go-windows-terminal-sequences v1.0.2
-github.com/konsorten/go-windows-terminal-sequences
-# github.com/mattn/go-colorable v0.1.6
 ## explicit
+github.com/joho/godotenv
+# github.com/mattn/go-colorable v0.1.6
+## explicit; go 1.13
 github.com/mattn/go-colorable
 # github.com/mattn/go-isatty v0.0.12
+## explicit; go 1.12
 github.com/mattn/go-isatty
 # github.com/mattn/go-runewidth v0.0.8
-## explicit
+## explicit; go 1.9
 github.com/mattn/go-runewidth
 # github.com/rogpeppe/go-internal v1.3.0
+## explicit
 github.com/rogpeppe/go-internal/modfile
 github.com/rogpeppe/go-internal/module
 github.com/rogpeppe/go-internal/semver
-# github.com/sirupsen/logrus v1.4.2
-## explicit
+# github.com/sirupsen/logrus v1.8.1
+## explicit; go 1.13
 github.com/sirupsen/logrus
-# golang.org/x/sys v0.0.0-20200223170610-d5e6a3e2c0ae
+# golang.org/x/sys v0.18.0
+## explicit; go 1.18
 golang.org/x/sys/unix
-# gopkg.in/VividCortex/ewma.v1 v1.1.1
-## explicit
-# gopkg.in/cheggaaa/pb.v2 v2.0.7
-## explicit
-# gopkg.in/fatih/color.v1 v1.7.0
-## explicit
-# gopkg.in/mattn/go-colorable.v0 v0.1.0
-## explicit
-# gopkg.in/mattn/go-isatty.v0 v0.0.4
-## explicit
-# gopkg.in/mattn/go-runewidth.v0 v0.0.4
-## explicit
+golang.org/x/sys/windows

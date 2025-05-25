@@ -1,113 +1,138 @@
 package hyperscan
 
 import (
-	"errors"
+	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/flier/gohs/internal/hs"
 )
 
-// The expression of pattern
-type Expression string
+// A type containing error details that is returned by the compile calls on failure.
+//
+// The caller may inspect the values returned in this type to determine the cause of failure.
+type CompileError = hs.CompileError
 
-func (e Expression) String() string { return string(e) }
+// CompileFlag represents a pattern flag.
+type CompileFlag = hs.CompileFlag
 
-type Pattern struct {
-	Expression             // The expression to parse.
-	Flags      CompileFlag // Flags which modify the behaviour of the expression.
-	Id         int         // The ID number to be associated with the corresponding pattern
-	info       *ExprInfo
-}
-
-func NewPattern(expr string, flags CompileFlag) *Pattern {
-	return &Pattern{Expression: Expression(expr), Flags: flags}
-}
-
-func (p *Pattern) IsValid() bool {
-	_, err := p.Info()
-
-	return err == nil
-}
-
-// Provides information about a regular expression.
-func (p *Pattern) Info() (*ExprInfo, error) {
-	if p.info == nil {
-		info, err := hsExpressionInfo(string(p.Expression), p.Flags)
-
-		if err != nil {
-			return nil, err
-		}
-
-		p.info = info
-	}
-
-	return p.info, nil
-}
-
-func (p *Pattern) String() string {
-	return "/" + string(p.Expression) + "/" + p.Flags.String()
-}
+const (
+	// Caseless represents set case-insensitive matching.
+	Caseless CompileFlag = hs.Caseless
+	// DotAll represents matching a `.` will not exclude newlines.
+	DotAll CompileFlag = hs.DotAll
+	// MultiLine set multi-line anchoring.
+	MultiLine CompileFlag = hs.MultiLine
+	// SingleMatch set single-match only mode.
+	SingleMatch CompileFlag = hs.SingleMatch
+	// AllowEmpty allow expressions that can match against empty buffers.
+	AllowEmpty CompileFlag = hs.AllowEmpty
+	// Utf8Mode enable UTF-8 mode for this expression.
+	Utf8Mode CompileFlag = hs.Utf8Mode
+	// UnicodeProperty enable Unicode property support for this expression.
+	UnicodeProperty CompileFlag = hs.UnicodeProperty
+	// PrefilterMode enable prefiltering mode for this expression.
+	PrefilterMode CompileFlag = hs.PrefilterMode
+	// SomLeftMost enable leftmost start of match reporting.
+	SomLeftMost CompileFlag = hs.SomLeftMost
+)
 
 /*
+ParseCompileFlag parse the compile pattern flags from string
 
-Parse pattern from a formated string
-
-	/<expression>/[flags]
-
-For example, the following pattern will match `test` in the caseless and multi-lines mode
-
-	/test/im
-
+	i	Caseless 		Case-insensitive matching
+	s	DotAll			Dot (.) will match newlines
+	m	MultiLine		Multi-line anchoring
+	H	SingleMatch		Report match ID at most once (`o` deprecated)
+	V	AllowEmpty		Allow patterns that can match against empty buffers (`e` deprecated)
+	8	Utf8Mode		UTF-8 mode (`u` deprecated)
+	W	UnicodeProperty		Unicode property support (`p` deprecated)
+	P	PrefilterMode		Prefiltering mode (`f` deprecated)
+	L	SomLeftMost		Leftmost start of match reporting (`l` deprecated)
+	C	Combination		Logical combination of patterns (Hyperscan 5.0)
+	Q	Quiet			Quiet at matching (Hyperscan 5.0)
 */
-func ParsePattern(s string) (*Pattern, error) {
-	var p Pattern
+func ParseCompileFlag(s string) (CompileFlag, error) {
+	var flags CompileFlag
 
-	if n := strings.LastIndex(s, "/"); n < 1 || !strings.HasPrefix(s, "/") {
-		p.Expression = Expression(s)
-	} else {
-		p.Expression = Expression(s[1:n])
-
-		flags, err := ParseCompileFlag(s[n+1:])
-
-		if err != nil {
-			return nil, errors.New("invalid pattern, " + err.Error())
+	for _, c := range s {
+		if flag, exists := hs.CompileFlags[c]; exists {
+			flags |= flag
+		} else if flag, exists := hs.DeprecatedCompileFlags[c]; exists {
+			flags |= flag
+		} else {
+			return 0, fmt.Errorf("flag `%c`, %w", c, ErrInvalid)
 		}
-
-		p.Flags = flags
 	}
 
-	info, err := hsExpressionInfo(string(p.Expression), p.Flags)
+	return flags, nil
+}
 
-	if err != nil {
-		return nil, errors.New("invalid pattern, " + err.Error())
+// ModeFlag represents the compile mode flags.
+type ModeFlag = hs.ModeFlag
+
+const (
+	// BlockMode for the block scan (non-streaming) database.
+	BlockMode ModeFlag = hs.BlockMode
+	// NoStreamMode is alias for Block.
+	NoStreamMode ModeFlag = hs.NoStreamMode
+	// StreamMode for the streaming database.
+	StreamMode ModeFlag = hs.StreamMode
+	// VectoredMode for the vectored scanning database.
+	VectoredMode ModeFlag = hs.VectoredMode
+	// SomHorizonLargeMode use full precision to track start of match offsets in stream state.
+	SomHorizonLargeMode ModeFlag = hs.SomHorizonLargeMode
+	// SomHorizonMediumMode use medium precision to track start of match offsets in stream state (within 2^32 bytes).
+	SomHorizonMediumMode ModeFlag = hs.SomHorizonMediumMode
+	// SomHorizonSmallMode use limited precision to track start of match offsets in stream state (within 2^16 bytes).
+	SomHorizonSmallMode ModeFlag = hs.SomHorizonSmallMode
+)
+
+// ParseModeFlag parse a database mode from string.
+func ParseModeFlag(s string) (ModeFlag, error) {
+	if mode, exists := hs.ModeFlags[strings.ToUpper(s)]; exists {
+		return mode, nil
 	}
 
-	p.info = info
-
-	return &p, nil
+	return BlockMode, fmt.Errorf("database mode %s, %w", s, ErrInvalid)
 }
 
-// A type containing information on the target platform.
-type Platform interface {
-	// Information about the target platform which may be used to guide the optimisation process of the compile.
-	Tune() TuneFlag
+// Builder creates a database with the given mode and target platform.
+type Builder interface {
+	// Build the database with the given mode.
+	Build(mode ModeFlag) (Database, error)
 
-	// Relevant CPU features available on the target platform
-	CpuFeatures() CpuFeature
+	// ForPlatform determine the target platform for the database
+	ForPlatform(mode ModeFlag, platform Platform) (Database, error)
 }
 
-func NewPlatform(tune TuneFlag, cpu CpuFeature) Platform { return newPlatformInfo(tune, cpu) }
-
-// Populates the platform information based on the current host.
-func PopulatePlatform() Platform {
-	platform, _ := hsPopulatePlatform()
-
-	return platform
+// Build the database with the given mode.
+func (p *Pattern) Build(mode ModeFlag) (Database, error) {
+	return p.ForPlatform(mode, nil)
 }
 
-// A type to help to build up a database
+// ForPlatform determine the target platform for the database.
+func (p *Pattern) ForPlatform(mode ModeFlag, platform Platform) (Database, error) {
+	b := DatabaseBuilder{Patterns: Patterns{p}, Mode: mode, Platform: platform}
+	return b.Build()
+}
+
+// Build the database with the given mode.
+func (p Patterns) Build(mode ModeFlag) (Database, error) {
+	return p.ForPlatform(mode, nil)
+}
+
+// ForPlatform determine the target platform for the database.
+func (p Patterns) ForPlatform(mode ModeFlag, platform Platform) (Database, error) {
+	b := DatabaseBuilder{Patterns: p, Mode: mode, Platform: platform}
+	return b.Build()
+}
+
+// DatabaseBuilder creates a database that will be used to matching the patterns.
 type DatabaseBuilder struct {
 	// Array of patterns to compile.
-	Patterns []*Pattern
+	Patterns
 
 	// Compiler mode flags that affect the database as a whole. (Default: block mode)
 	Mode ModeFlag
@@ -117,7 +142,8 @@ type DatabaseBuilder struct {
 	Platform Platform
 }
 
-func (b *DatabaseBuilder) AddExpressions(exprs ...Expression) *DatabaseBuilder {
+// AddExpressions add more expressions to the database.
+func (b *DatabaseBuilder) AddExpressions(exprs ...string) *DatabaseBuilder {
 	for _, expr := range exprs {
 		b.Patterns = append(b.Patterns, &Pattern{Expression: expr, Id: len(b.Patterns) + 1})
 	}
@@ -125,148 +151,175 @@ func (b *DatabaseBuilder) AddExpressions(exprs ...Expression) *DatabaseBuilder {
 	return b
 }
 
-func (b *DatabaseBuilder) AddExpressionWithFlags(expr Expression, flags CompileFlag) *DatabaseBuilder {
+// AddExpressionWithFlags add more expressions with flags to the database.
+func (b *DatabaseBuilder) AddExpressionWithFlags(expr string, flags CompileFlag) *DatabaseBuilder {
 	b.Patterns = append(b.Patterns, &Pattern{Expression: expr, Flags: flags, Id: len(b.Patterns) + 1})
 
 	return b
 }
 
+// Build a database base on the expressions and platform.
 func (b *DatabaseBuilder) Build() (Database, error) {
 	if b.Patterns == nil {
-		return nil, errors.New("no patterns")
-	}
-
-	needSomLeftMost := false
-
-	for _, pattern := range b.Patterns {
-		if (pattern.Flags & SomLeftMost) == SomLeftMost {
-			needSomLeftMost = true
-		}
+		return nil, ErrInvalid
 	}
 
 	mode := b.Mode
 
 	if mode == 0 {
 		mode = BlockMode
+	} else if mode == StreamMode {
+		som := false
+
+		for _, pattern := range b.Patterns {
+			if (pattern.Flags & SomLeftMost) == SomLeftMost {
+				som = true
+			}
+		}
+
+		if som && mode&(SomHorizonSmallMode|SomHorizonMediumMode|SomHorizonLargeMode) == 0 {
+			mode |= SomHorizonSmallMode
+		}
 	}
 
-	if mode == StreamMode && needSomLeftMost {
-		mode |= SomHorizonSmallMode
-	}
+	platform, _ := b.Platform.(*hs.PlatformInfo)
 
-	platform, _ := b.Platform.(*hsPlatformInfo)
-
-	db, err := hsCompileMulti(b.Patterns, mode, platform)
-
+	db, err := hs.CompileMulti(b.Patterns, mode, platform)
 	if err != nil {
-		return nil, err
+		return nil, err //nolint: wrapcheck
 	}
 
-	switch mode & ModeMask {
+	switch mode & hs.ModeMask {
 	case StreamMode:
-		return newStreamDatabase(db)
+		return newStreamDatabase(db), nil
 	case VectoredMode:
-		return newVectoredDatabase(db)
+		return newVectoredDatabase(db), nil
 	case BlockMode:
-		return newBlockDatabase(db)
+		return newBlockDatabase(db), nil
+	default:
+		return nil, fmt.Errorf("mode %d, %w", mode, ErrInvalid)
 	}
-
-	return nil, errors.New("unknown mode")
 }
 
-func NewBlockDatabase(patterns ...*Pattern) (BlockDatabase, error) {
-	builder := &DatabaseBuilder{Patterns: patterns, Mode: BlockMode}
+// NewBlockDatabase create a block database base on the patterns.
+func NewBlockDatabase(patterns ...*Pattern) (bdb BlockDatabase, err error) {
+	var db Database
+	db, err = Patterns(patterns).Build(BlockMode)
+	if err != nil {
+		return
+	}
 
-	db, err := builder.Build()
+	bdb, _ = db.(*blockDatabase)
+	return
+}
 
+// NewManagedBlockDatabase is a wrapper for NewBlockDatabase that
+// sets a finalizer on the Scratch instance so that memory is
+// freed once the object is no longer in use.
+func NewManagedBlockDatabase(patterns ...*Pattern) (BlockDatabase, error) {
+	db, err := NewBlockDatabase(patterns...)
 	if err != nil {
 		return nil, err
 	}
 
-	return db.(*blockDatabase), err
+	runtime.SetFinalizer(db, func(obj BlockDatabase) {
+		_ = obj.Close()
+	})
+
+	return db, nil
 }
 
-func NewStreamDatabase(patterns ...*Pattern) (StreamDatabase, error) {
-	builder := &DatabaseBuilder{Patterns: patterns, Mode: StreamMode}
+// NewStreamDatabase create a stream database base on the patterns.
+func NewStreamDatabase(patterns ...*Pattern) (sdb StreamDatabase, err error) {
+	var db Database
+	db, err = Patterns(patterns).Build(StreamMode)
+	if err != nil {
+		return
+	}
 
-	db, err := builder.Build()
+	sdb, _ = db.(*streamDatabase)
+	return
+}
 
+// NewManagedStreamDatabase is a wrapper for NewStreamDatabase that
+// sets a finalizer on the Scratch instance so that memory is
+// freed once the object is no longer in use.
+func NewManagedStreamDatabase(patterns ...*Pattern) (StreamDatabase, error) {
+	db, err := NewStreamDatabase(patterns...)
 	if err != nil {
 		return nil, err
 	}
 
-	return db.(*streamDatabase), err
+	runtime.SetFinalizer(db, func(obj StreamDatabase) {
+		_ = obj.Close()
+	})
+
+	return db, nil
 }
 
-func NewMediumStreamDatabase(patterns ...*Pattern) (StreamDatabase, error) {
-	builder := &DatabaseBuilder{Patterns: patterns, Mode: StreamMode | SomHorizonMediumMode}
-
-	db, err := builder.Build()
-
+// NewMediumStreamDatabase create a medium-sized stream database base on the patterns.
+func NewMediumStreamDatabase(patterns ...*Pattern) (sdb StreamDatabase, err error) {
+	var db Database
+	db, err = Patterns(patterns).Build(StreamMode | SomHorizonMediumMode)
 	if err != nil {
-		return nil, err
+		return
 	}
 
-	return db.(*streamDatabase), err
+	sdb, _ = db.(*streamDatabase)
+	return
 }
 
-func NewLargeStreamDatabase(patterns ...*Pattern) (StreamDatabase, error) {
-	builder := &DatabaseBuilder{Patterns: patterns, Mode: StreamMode | SomHorizonLargeMode}
-
-	db, err := builder.Build()
-
+// NewLargeStreamDatabase create a large-sized stream database base on the patterns.
+func NewLargeStreamDatabase(patterns ...*Pattern) (sdb StreamDatabase, err error) {
+	var db Database
+	db, err = Patterns(patterns).Build(StreamMode | SomHorizonLargeMode)
 	if err != nil {
-		return nil, err
+		return
 	}
 
-	return db.(*streamDatabase), err
+	sdb, _ = db.(*streamDatabase)
+	return
 }
 
-func NewVectoredDatabase(patterns ...*Pattern) (VectoredDatabase, error) {
-	builder := &DatabaseBuilder{Patterns: patterns, Mode: VectoredMode}
-
-	db, err := builder.Build()
-
+// NewVectoredDatabase create a vectored database base on the patterns.
+func NewVectoredDatabase(patterns ...*Pattern) (vdb VectoredDatabase, err error) {
+	var db Database
+	db, err = Patterns(patterns).Build(VectoredMode)
 	if err != nil {
-		return nil, err
+		return
 	}
 
-	return db.(*vectoredDatabase), err
+	vdb, _ = db.(*vectoredDatabase)
+	return
 }
 
 // Compile a regular expression and returns, if successful,
 // a pattern database in the block mode that can be used to match against text.
 func Compile(expr string) (Database, error) {
-	db, err := hsCompile(expr, SomLeftMost, BlockMode, nil)
-
+	db, err := hs.Compile(expr, SomLeftMost, BlockMode, nil)
 	if err != nil {
-		return nil, err
+		return nil, err //nolint: wrapcheck
 	}
 
-	return newBlockDatabase(db)
+	return newBlockDatabase(db), nil
 }
 
 // MustCompile is like Compile but panics if the expression cannot be parsed.
 // It simplifies safe initialization of global variables holding compiled regular expressions.
 func MustCompile(expr string) Database {
-	db, err := hsCompile(expr, SomLeftMost, BlockMode, nil)
-
+	db, err := Compile(expr)
 	if err != nil {
 		panic(`Compile(` + Quote(expr) + `): ` + err.Error())
 	}
 
-	bdb, err := newBlockDatabase(db)
-
-	if err != nil {
-		panic(`Compile(` + Quote(expr) + `): ` + err.Error())
-	}
-
-	return bdb
+	return db
 }
 
+// Quote returns a quoted string literal representing s.
 func Quote(s string) string {
 	if strconv.CanBackquote(s) {
 		return "`" + s + "`"
 	}
+
 	return strconv.Quote(s)
 }
